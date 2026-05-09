@@ -26,9 +26,13 @@ def _parse_inline_formatting(text: str) -> list[dict[str, Any]]:
         return []
 
     nodes: list[dict[str, Any]] = []
-    # Pattern order matters: bold before italic, code before others
+    # Pattern order matters: bold before italic, code before others.
+    # Mention pattern is placed before link pattern so that
+    # `[~accountid:...]` is matched as a mention rather than being
+    # mistakenly considered for the link alternative.
     inline_re = re.compile(
         r"`(?P<code_inner>[^`]+)`"
+        r"|\[~accountid:(?P<mention_id>[^\]]+)\]"
         r"|\*\*(?P<bold_inner>.+?)\*\*"
         r"|~~(?P<strike_inner>.+?)~~"
         r"|\[(?P<link_text>[^\]]+)\]\((?P<link_href>[^)]+)\)"
@@ -49,6 +53,13 @@ def _parse_inline_formatting(text: str) -> list[dict[str, Any]]:
                     "type": "text",
                     "text": m.group("code_inner"),
                     "marks": [{"type": "code"}],
+                }
+            )
+        elif m.group("mention_id") is not None:
+            nodes.append(
+                {
+                    "type": "mention",
+                    "attrs": {"id": m.group("mention_id")},
                 }
             )
         elif m.group("bold_inner") is not None:

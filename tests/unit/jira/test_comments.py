@@ -534,6 +534,108 @@ class TestCommentsMixin:
                 public=True,
             )
 
+    # --- Mention (@-mention) handling tests ---
+
+    def test_add_comment_emits_adf_mention_node_for_accountid_on_cloud(
+        self, comments_mixin
+    ):
+        """Cloud: [~accountid:<id>] becomes an ADF mention node."""
+        mock_response = {
+            "id": "10001",
+            "body": "",
+            "created": "2024-01-01T10:00:00.000+0000",
+            "author": {"displayName": "John Doe"},
+        }
+        comments_mixin._post_api3 = Mock(return_value=mock_response)
+
+        comments_mixin.add_comment(
+            "PROJ-1",
+            "Hi [~accountid:712020:abc-def], please review",
+        )
+
+        call_args = comments_mixin._post_api3.call_args
+        assert call_args[0][0] == "issue/PROJ-1/comment"
+        adf_body = call_args[0][1]["body"]
+        assert isinstance(adf_body, dict)
+        assert adf_body["type"] == "doc"
+
+        # Find the paragraph and inspect inline children
+        paragraphs = [
+            node for node in adf_body["content"] if node.get("type") == "paragraph"
+        ]
+        assert len(paragraphs) == 1
+        inline_nodes = paragraphs[0]["content"]
+
+        mentions = [n for n in inline_nodes if n.get("type") == "mention"]
+        assert len(mentions) == 1
+        assert mentions[0] == {
+            "type": "mention",
+            "attrs": {"id": "712020:abc-def"},
+        }
+
+        # The mention should be sandwiched between the two text nodes
+        mention_idx = inline_nodes.index(mentions[0])
+        assert inline_nodes[mention_idx - 1] == {"type": "text", "text": "Hi "}
+        assert inline_nodes[mention_idx + 1] == {
+            "type": "text",
+            "text": ", please review",
+        }
+
+    def test_add_comment_handles_multiple_mentions_in_same_paragraph(
+        self, comments_mixin
+    ):
+        """Cloud: multiple mentions in one line produce multiple mention nodes."""
+        mock_response = {
+            "id": "10002",
+            "body": "",
+            "created": "2024-01-01T10:00:00.000+0000",
+            "author": {"displayName": "John Doe"},
+        }
+        comments_mixin._post_api3 = Mock(return_value=mock_response)
+
+        comments_mixin.add_comment(
+            "PROJ-1",
+            "@check this [~accountid:a] and [~accountid:b]",
+        )
+
+        adf_body = comments_mixin._post_api3.call_args[0][1]["body"]
+        paragraphs = [
+            node for node in adf_body["content"] if node.get("type") == "paragraph"
+        ]
+        assert len(paragraphs) == 1
+        inline_nodes = paragraphs[0]["content"]
+
+        mentions = [n for n in inline_nodes if n.get("type") == "mention"]
+        assert len(mentions) == 2
+        assert mentions[0] == {"type": "mention", "attrs": {"id": "a"}}
+        assert mentions[1] == {"type": "mention", "attrs": {"id": "b"}}
+
+    def test_add_comment_dc_still_uses_wiki_markup(self, server_comments_mixin):
+        """DC: mentions are passed through as wiki markup (no ADF)."""
+        # Pass-through preprocessor so we can verify the input string travels
+        # to the legacy API unchanged.
+        server_comments_mixin.preprocessor.markdown_to_jira = Mock(
+            side_effect=lambda x: x
+        )
+        server_comments_mixin.jira.issue_add_comment.return_value = {
+            "id": "10003",
+            "body": "Hi [~accountid:712020:abc-def], please review",
+            "created": "2024-01-01T10:00:00.000+0000",
+            "author": {"displayName": "Test User"},
+        }
+
+        server_comments_mixin.add_comment(
+            "PROJ-1",
+            "Hi [~accountid:712020:abc-def], please review",
+        )
+
+        # _post_api3 should NOT be reachable on DC; legacy API is used.
+        call_args = server_comments_mixin.jira.issue_add_comment.call_args
+        comment_arg = call_args[0][1]
+        assert isinstance(comment_arg, str)
+        assert not isinstance(comment_arg, dict)
+        assert comment_arg == "Hi [~accountid:712020:abc-def], please review"
+
     def test_add_comment_public_none_uses_jira_api(self, comments_mixin):
         """public=None (default) uses normal Jira API path."""
         mock_response = {
